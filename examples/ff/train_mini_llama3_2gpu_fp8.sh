@@ -162,7 +162,7 @@ fi
 EVAL_AND_LOGGING_ARGS=(
     --log-interval 1
     --eval-iters 32
-    --eval-interval 100
+    --eval-interval 1000
     --save-interval 1000
     --log-throughput
     --profile
@@ -190,6 +190,6 @@ torchrun ${DISTRIBUTED_ARGS[@]} \
     ${DTYPE_ARGS[@]} \
     ${MODEL_PARALLEL_ARGS[@]} \
     ${DATA_ARGS_LIST[@]} \
-    ${EVAL_AND_LOGGING_ARGS[@]}
+    ${EVAL_AND_LOGGING_ARGS[@]} > log.txt 2>&1
 
 set +x
