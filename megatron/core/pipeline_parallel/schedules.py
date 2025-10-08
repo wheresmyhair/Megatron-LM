@@ -1,6 +1,7 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 
 import contextlib
+import time
 from functools import partial
 from typing import Callable, Iterator, List, Optional, Union
 
@@ -2120,6 +2121,7 @@ def forward_backward_pipelining_without_interleaving(
 
     # Run warmup forward passes.
     for i in range(num_warmup_microbatches):
+        print_with_rank_time(f"warmup forward pass {i}")
         # Decide to checkpoint all layers' activations of the current micro-batch
         if max_outstanding_backprops is not None:
             checkpoint_activations_microbatch = (
@@ -2129,9 +2131,11 @@ def forward_backward_pipelining_without_interleaving(
         else:
             checkpoint_activations_microbatch = None
 
+        print_with_rank_time(f"warmup recv forward tensor {i}")
         input_tensor = p2p_communicator.recv_forward(
             recv_tensor_shapes, is_pp_first_stage(p2p_communicator.pp_group)
         )
+        print_with_rank_time(f"warmup forward step {i}")
         output_tensor, num_tokens = forward_step(
             forward_step_func,
             data_iterator,
@@ -2147,6 +2151,7 @@ def forward_backward_pipelining_without_interleaving(
             current_microbatch=i,
             is_last_stage=is_pp_last_stage(p2p_communicator.pp_group),
         )
+        print_with_rank_time(f"warmup send forward tensor {i}")
         p2p_communicator.send_forward(output_tensor, is_pp_last_stage(p2p_communicator.pp_group))
         total_num_tokens += num_tokens
 
@@ -2159,12 +2164,14 @@ def forward_backward_pipelining_without_interleaving(
     # If all microbatches are run in warmup / cooldown phase, then no need to
     # receive this tensor here.
     if num_microbatches_remaining > 0:
+        print_with_rank_time(f"before steady recv forward tensor")
         input_tensor = p2p_communicator.recv_forward(
             recv_tensor_shapes, is_pp_first_stage(p2p_communicator.pp_group)
         )
 
     # Run 1F1B in steady state.
     for i in range(num_microbatches_remaining):
+        print_with_rank_time(f"steady forward pass {i}")
         last_iteration = i == (num_microbatches_remaining - 1)
 
         # Decide to checkpoint all layers' activations of the current micro-batch
@@ -2175,6 +2182,7 @@ def forward_backward_pipelining_without_interleaving(
         else:
             checkpoint_activations_microbatch = None
 
+        print_with_rank_time(f"steady forward step {i}")
         output_tensor, num_tokens = forward_step(
             forward_step_func,
             data_iterator,
@@ -2195,6 +2203,7 @@ def forward_backward_pipelining_without_interleaving(
         total_num_tokens += num_tokens
 
         if forward_only:
+            print_with_rank_time(f"steady fwd only send forward tensor {i}")
             p2p_communicator.send_forward(
                 output_tensor, is_pp_last_stage(p2p_communicator.pp_group)
             )
@@ -2203,6 +2212,7 @@ def forward_backward_pipelining_without_interleaving(
                     recv_tensor_shapes, is_pp_first_stage(p2p_communicator.pp_group)
                 )
         else:
+            print_with_rank_time(f"steady fwd only send forward recv backward {i}")
             output_tensor_grad = p2p_communicator.send_forward_recv_backward(
                 output_tensor, send_tensor_shapes, is_pp_last_stage(p2p_communicator.pp_group)
             )
@@ -2223,16 +2233,19 @@ def forward_backward_pipelining_without_interleaving(
                 if config.grad_sync_func is None or rank == 0:
                     enable_grad_sync()
 
+            print_with_rank_time(f"steady fwd only backward step {i}")
             input_tensor_grad = backward_step(
                 input_tensor, output_tensor, output_tensor_grad, model_type, config
             )
 
             if last_iteration:
                 input_tensor = None
+                print_with_rank_time(f"steady fwd only send backward tensor {i}")
                 p2p_communicator.send_backward(
                     input_tensor_grad, is_pp_first_stage(p2p_communicator.pp_group)
                 )
             else:
+                print_with_rank_time(f"steady fwd only send backward recv forward {i}")
                 input_tensor = p2p_communicator.send_backward_recv_forward(
                     input_tensor_grad,
                     recv_tensor_shapes,
@@ -2242,7 +2255,7 @@ def forward_backward_pipelining_without_interleaving(
     # Run cooldown backward passes.
     if not forward_only:
         for i in range(num_warmup_microbatches):
-
+            print_with_rank_time(f"cooldown backward pass {i}")
             # Enable async grad reduction in the last backward pass
             # Note: If grad sync function is provided, only enable
             # async grad reduction in first pipeline stage. Other
@@ -2255,14 +2268,17 @@ def forward_backward_pipelining_without_interleaving(
             input_tensor = input_tensors.pop(0)
             output_tensor = output_tensors.pop(0)
 
+            print_with_rank_time(f"cooldown recv backward tensor {i}")
             output_tensor_grad = p2p_communicator.recv_backward(
                 send_tensor_shapes, is_pp_last_stage(p2p_communicator.pp_group)
             )
 
+            print_with_rank_time(f"cooldown backward step {i}")
             input_tensor_grad = backward_step(
                 input_tensor, output_tensor, output_tensor_grad, model_type, config
             )
 
+            print_with_rank_time(f"cooldown send backward tensor {i}")
             p2p_communicator.send_backward(
                 input_tensor_grad, is_pp_first_stage(p2p_communicator.pp_group)
             )
@@ -2658,3 +2674,7 @@ def forward_backward_pipelining_fused(
         create_cudagraphs()
 
     return forward_data_store
+
+
+def print_with_rank_time(message):
+    print(f"[rank {torch.distributed.get_rank()}] [{time.strftime('%Y-%m-%d %H-%M-%S', time.localtime(time.time())) + f'-{int((time.time() % 1) * 1000):03d}'}] {message}", flush=True)

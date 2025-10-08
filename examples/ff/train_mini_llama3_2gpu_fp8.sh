@@ -36,7 +36,7 @@ PP_SIZE=2
 MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=8
 NUM_LAYERS=2  
-DTYPE="fp8"
+DTYPE="bf16"
 SEQ_LENGTH=1024
 MAX_POSITION_EMBEDDINGS=1024
 
@@ -79,9 +79,9 @@ MODEL_ARGS=(
 TRAINING_ARGS=(
     --micro-batch-size $MICRO_BATCH_SIZE
     --global-batch-size $GLOBAL_BATCH_SIZE
-    --train-samples 2000
-    --lr-decay-samples 1800
-    --lr-warmup-samples 200
+    --train-samples 200
+    --lr-decay-samples 180
+    --lr-warmup-samples 20
     --lr 0.00015
     --min-lr 0.00001
     --decoupled-lr 5.0e-4      # Specific to decoupled AdamW, ensure optimizer is compatible
@@ -161,8 +161,6 @@ fi
 
 EVAL_AND_LOGGING_ARGS=(
     --log-interval 1
-    --eval-iters 32
-    --eval-interval 1000
     --save-interval 1000
     --log-throughput
     --profile
